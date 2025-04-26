@@ -1,0 +1,14 @@
+services:
+  producer:
+    build:
+      context: ./producer
+    volumes:
+      - ./secrets.json:/app/secrets.json
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
+networks:
+  default:
+    external:
+      name: telemetry-net
+
