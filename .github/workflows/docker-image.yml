@@ -1,0 +1,24 @@
+name: Data Fetcher Build Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Create telemetry-net network
+      run: sudo docker network create telemetry-net || echo "Network already exists"
+      
+    - name: Build the Docker image
+      run: sudo docker compose up --build -d
+
+      
