@@ -72,9 +72,8 @@ def get_sites(cookie):
     response = requests.request("GET", url, headers=headers, data=payload)
 
     if response.status_code == requests.codes.ok:
-      # print(response.text)
-      payload = response.json()
-      print(payload)
+      print(response.json())
+      return response.text
       
     else:
       print('bad response')
