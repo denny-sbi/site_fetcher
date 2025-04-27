@@ -304,6 +304,29 @@ def get_site_info(cookie, site_id):
       print(f'bad response from site info for site {site_id}')
       return
 
+def get_site_hardware(cookie, site_id):
+    '''Fetch site hardware from also energy, requires session cookie and site id'''
+    url = f"https://api.alsoenergy.com/Sites/{site_id}/Hardware?includeArchivedFields=false&includeAlertCount=false&includeAlertInfo=false&includeDisabledHardware=false&includeSummaryFields=false&includeDeviceConfig=false&includeDataNameFields=false"
+
+    payload = {}
+    headers = {
+      'accept': 'application/json',
+      'Cookie': cookie
+    }
+
+    response = requests.request("GET", url, headers=headers, data=payload)
+
+    if response.status_code == requests.codes.ok:
+        response = response.json()
+        response['site_id'] = site_id
+
+        return json.dumps(response)
+      
+    else:
+      print(f'bad response from site hardware for site {site_id}')
+      return
+
+
 
 
 def produce_site_info(cookie, producer, sites):
@@ -314,6 +337,7 @@ def produce_site_info(cookie, producer, sites):
     for site in sites:
         site_id = site['siteId']
 
+        # info
         try:
             site_data = get_site_info(cookie, site_id)
         except Exception as e:
@@ -324,7 +348,23 @@ def produce_site_info(cookie, producer, sites):
         try:
             # Push data to Kafka topic
             producer.produce('site_info', value=site_data, callback=kafka_callback)
-            
+            # Flush any pending messages to Kafka
+            producer.flush()
+
+        except KeyboardInterrupt:
+            print("Producer interrupted. Exiting...")
+
+        # Hardware
+        try:
+            site_data = get_site_hardware(cookie, site_id)
+        except Exception as e:
+            print(f"error fetching site hardware for site {site_id}")
+            print(e)
+            return
+
+        try:
+            # Push data to Kafka topic
+            producer.produce('hardware', value=site_data, callback=kafka_callback)
             # Flush any pending messages to Kafka
             producer.flush()
 
