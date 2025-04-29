@@ -1,6 +1,7 @@
 import random
 import requests
 import time
+from datetime import datetime, timedelta
 import json
 from confluent_kafka import Producer
 
@@ -326,6 +327,50 @@ def get_site_hardware(cookie, site_id):
       print(f'bad response from site hardware for site {site_id}')
       return
 
+def get_meter_reads(cookie, site_id, meter_id):
+    '''Fetch meter reads from also energy, requires session cookie, site_id, and hardware id
+    Fetching is done in 15m incriments for the last day'''
+    today = datetime.now() - timedelta(days=30)
+    yesterday = today - timedelta(days=1)
+
+    # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
+    from_date = yesterday.strftime("%Y-%m-%d")
+    to_date = today.strftime("%Y-%m-%d")
+
+    url = f'https://api.alsoenergy.com/Data/BinData?fromLocalTime={from_date}T00%3A00%3A00&toLocalTime={to_date}T00%3A00%3A00&binSizes=Bin15Min'
+    print(url)
+    payload = json.dumps([
+        {
+            "hardwareId": meter_id,
+            "siteId": site_id,
+            "fieldName": "KWHnet",  # total energy
+            "function": "Diff"
+        }
+    ])
+
+    headers = {
+        'accept': 'application/json',
+        'Cookie': cookie,
+        'Content-Type': 'application/json-patch+json',
+    }
+
+    response = requests.request("POST", url, headers=headers, data=payload)
+    print(response.text)
+
+    if response.status_code == requests.codes.ok:
+        response = response.json()
+        response['site_id'] = site_id
+        response['meter_id'] = meter_id
+
+
+        return json.dumps(response)
+      
+    else:
+      print(f'bad response from meter reads for site {site_id}, meter {meter_id}')
+      print(json.dumps(response.json()))
+      return None
+
+
 
 
 
@@ -367,9 +412,38 @@ def produce_site_info(cookie, producer, sites):
             producer.produce('hardware', value=site_data, callback=kafka_callback)
             # Flush any pending messages to Kafka
             producer.flush()
-
         except KeyboardInterrupt:
             print("Producer interrupted. Exiting...")
+
+        if site_data is None or site_data == '':
+            continue
+
+        hardware = json.loads(site_data)['hardware']
+
+        for equipment in hardware:
+            if equipment['functionCode'] == 'PM':  # Production Meter
+
+                meter_id = equipment['id']
+
+                # Meter reads
+                try:
+                    meter_reads = get_meter_reads(cookie, site_id, meter_id)
+                except Exception as e:
+                    print(f"error fetching meter reads for site {site_id}, meter {meter_id}")
+                    print(e)
+                    continue
+
+                try:
+                    # Push data to Kafka topic
+                    producer.produce('rgm_data', value=meter_reads, callback=kafka_callback)
+                    # Flush any pending messages to Kafka
+                    producer.flush()
+                except Exception as e:
+                    print(f"error pushing meter reads for site {site_id}, meter {meter_id}")
+                    print(e)
+                    continue
+
+
 
     return
 
