@@ -187,7 +187,7 @@ site_list = '''
     },
     {
       "siteId": 67782,
-      "siteName": "Pivot - Edgar Solar"
+      "siteName": "Edgar Solar 1 LLC"
     }
   ]
 }
