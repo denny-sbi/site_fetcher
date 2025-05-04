@@ -263,28 +263,6 @@ def get_sites(cookie):
       print('bad response')
       return
 
-def produce_site_list(cookie, producer):
-    '''Function to fetch site list and push to kafka topic'''
-    try:
-        site_data = get_sites(cookie)
-    except Exception as e:
-        print("error fetching sites!")
-        print(e)
-
-        return None
-
-    try:
-        # Push data to Kafka topic
-        producer.produce('sites', value=site_data, callback=kafka_callback)
-        
-        # Flush any pending messages to Kafka
-        producer.flush()
-
-    except KeyboardInterrupt:
-        print("Producer interrupted. Exiting...")
-
-    return site_data
-
 def get_site_info(cookie, site_id):
     '''Fetch site info from also energy, requires session cookie and site id'''
     url = f"https://api.alsoenergy.com/Sites/{site_id}?includeProductionData=false"
@@ -381,6 +359,7 @@ def produce_site_info(cookie, producer, sites):
 
     for site in sites:
         site_id = site['siteId']
+        name = site['siteName']
 
         # info
         try:
@@ -389,10 +368,14 @@ def produce_site_info(cookie, producer, sites):
             print(f"error fetching site info for site {site_id}")
             print(e)
             return
+        
+        site_data = json.loads(site_data)
+        site_data['name'] = name
+        site_data = json.dumps(site_data)
 
         try:
             # Push data to Kafka topic
-            producer.produce('site_info', value=site_data, callback=kafka_callback)
+            producer.produce('sites', value=site_data, callback=kafka_callback)
             # Flush any pending messages to Kafka
             producer.flush()
 
@@ -443,8 +426,6 @@ def produce_site_info(cookie, producer, sites):
                     print(e)
                     continue
 
-
-
     return
 
 
@@ -474,8 +455,8 @@ def main():
 
 
 
-    # Produce sites & keep locally
-    sites = produce_site_list(cookie, producer)
+    # sites & keep locally
+    sites = get_sites(cookie)
     # sites = site_list
 
     print("Sleeping for 5 seconds to ensure the sites get loaded first")
