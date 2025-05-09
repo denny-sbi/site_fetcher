@@ -5,194 +5,6 @@ from datetime import datetime, timedelta
 import json
 from confluent_kafka import Producer
 
-# string for testing purposes
-site_list = '''
-{
-  "items": [
-    {
-      "siteId": 64557,
-      "siteName": "BH CSG 3 LLC"
-    },
-    {
-      "siteId": 64099,
-      "siteName": "Pivot Energy Minnesota Solar 1 LLC"
-    },
-    {
-      "siteId": 64100,
-      "siteName": "Pivot Energy Minnesota Solar 10 LLC"
-    },
-    {
-      "siteId": 64253,
-      "siteName": "Kankakee Solar 4b LLC"
-    },
-    {
-      "siteId": 64768,
-      "siteName": "Pivot Solar 20 LLC"
-    },
-    {
-      "siteId": 64771,
-      "siteName": "Pivot Solar 26 LLC"
-    },
-    {
-      "siteId": 64770,
-      "siteName": "Pivot Solar 23 LLC"
-    },
-    {
-      "siteId": 64549,
-      "siteName": "Pivot Solar 24 LLC"
-    },
-    {
-      "siteId": 64550,
-      "siteName": "Pivot Solar 25 LLC"
-    },
-    {
-      "siteId": 64769,
-      "siteName": "Pivot Solar 22 LLC"
-    },
-    {
-      "siteId": 64605,
-      "siteName": "Pivot Solar 27 LLC"
-    },
-    {
-      "siteId": 64772,
-      "siteName": "Pivot Solar 28 LLC"
-    },
-    {
-      "siteId": 64245,
-      "siteName": "Pivot Energy PPA 17 LLC"
-    },
-    {
-      "siteId": 64108,
-      "siteName": "Pivot Solar NY 9 LLC"
-    },
-    {
-      "siteId": 64101,
-      "siteName": "Pivot Solar NY 1 LLC"
-    },
-    {
-      "siteId": 64454,
-      "siteName": "Ka Lae Energy, LLC"
-    },
-    {
-      "siteId": 69375,
-      "siteName": "Burns Road Solar LLC"
-    },
-    {
-      "siteId": 64523,
-      "siteName": "Pivot Solar 21 LLC"
-    },
-    {
-      "siteId": 70998,
-      "siteName": "Chaberton Solar Catherine BTM LLC"
-    },
-    {
-      "siteId": 65331,
-      "siteName": "Chaberton Solar Catherine ANEM LLC"
-    },
-    {
-      "siteId": 64107,
-      "siteName": "Pivot Solar NY 6 LLC"
-    },
-    {
-      "siteId": 64103,
-      "siteName": "Pivot Solar NY 3 LLC"
-    },
-    {
-      "siteId": 64249,
-      "siteName": "Marion Solar 4 LLC"
-    },
-    {
-      "siteId": 64250,
-      "siteName": "Marion Solar 4B LLC"
-    },
-    {
-      "siteId": 65284,
-      "siteName": "Chaberton Solar Catherine LLC"
-    },
-    {
-      "siteId": 64251,
-      "siteName": "Kankakee Solar 1 LLC"
-    },
-    {
-      "siteId": 64246,
-      "siteName": "Grundy Solar 1 LLC"
-    },
-    {
-      "siteId": 64247,
-      "siteName": "Putnam Solar 1 LLC"
-    },
-    {
-      "siteId": 64248,
-      "siteName": "Vermilion Solar 1b LLC"
-    },
-    {
-      "siteId": 64244,
-      "siteName": "Putnam Solar 1b LLC"
-    },
-    {
-      "siteId": 64243,
-      "siteName": "St Clair Solar 3 LLC"
-    },
-    {
-      "siteId": 66412,
-      "siteName": "Pivot Solar 37 LLC"
-    },
-    {
-      "siteId": 69798,
-      "siteName": "Niagara Solar LLC"
-    },
-    {
-      "siteId": 64105,
-      "siteName": "Pivot Solar NY 4 LLC"
-    },
-    {
-      "siteId": 67438,
-      "siteName": "Pivot Energy PPA 22 LLC"
-    },
-    {
-      "siteId": 64252,
-      "siteName": "Kankakee Solar 3 LLC"
-    },
-    {
-      "siteId": 68111,
-      "siteName": "Clinton Solar 2b LLC"
-    },
-    {
-      "siteId": 67761,
-      "siteName": "Pivot Solar 35 LLC"
-    },
-    {
-      "siteId": 64106,
-      "siteName": "Pivot Solar NY 5 LLC"
-    },
-    {
-      "siteId": 68110,
-      "siteName": "Clinton Solar 2 LLC"
-    },
-    {
-      "siteId": 68109,
-      "siteName": "Marion Solar 2 LLC"
-    },
-    {
-      "siteId": 68173,
-      "siteName": "Pivot Solar 30 LLC"
-    },
-    {
-      "siteId": 66982,
-      "siteName": "Pivot Energy PPA 27 LLC"
-    },
-    {
-      "siteId": 71309,
-      "siteName": "Pivot Energy PPA 28 LLC"
-    },
-    {
-      "siteId": 67782,
-      "siteName": "Edgar Solar 1 LLC"
-    }
-  ]
-}
-'''
-
 def kafka_callback(err, msg):
     ''' Helper function for kafka to callback'''
     if err is not None:
@@ -262,28 +74,6 @@ def get_sites(cookie):
     else:
       print('bad response')
       return
-
-def produce_site_list(cookie, producer):
-    '''Function to fetch site list and push to kafka topic'''
-    try:
-        site_data = get_sites(cookie)
-    except Exception as e:
-        print("error fetching sites!")
-        print(e)
-
-        return None
-
-    try:
-        # Push data to Kafka topic
-        producer.produce('sites', value=site_data, callback=kafka_callback)
-        
-        # Flush any pending messages to Kafka
-        producer.flush()
-
-    except KeyboardInterrupt:
-        print("Producer interrupted. Exiting...")
-
-    return site_data
 
 def get_site_info(cookie, site_id):
     '''Fetch site info from also energy, requires session cookie and site id'''
@@ -381,6 +171,7 @@ def produce_site_info(cookie, producer, sites):
 
     for site in sites:
         site_id = site['siteId']
+        name = site['siteName']
 
         # info
         try:
@@ -389,10 +180,14 @@ def produce_site_info(cookie, producer, sites):
             print(f"error fetching site info for site {site_id}")
             print(e)
             return
+        
+        site_data = json.loads(site_data)
+        site_data['name'] = name
+        site_data = json.dumps(site_data)
 
         try:
             # Push data to Kafka topic
-            producer.produce('site_info', value=site_data, callback=kafka_callback)
+            producer.produce('sites', value=site_data, callback=kafka_callback)
             # Flush any pending messages to Kafka
             producer.flush()
 
@@ -443,8 +238,6 @@ def produce_site_info(cookie, producer, sites):
                     print(e)
                     continue
 
-
-
     return
 
 
@@ -474,9 +267,8 @@ def main():
 
 
 
-    # Produce sites & keep locally
-    sites = produce_site_list(cookie, producer)
-    # sites = site_list
+    # sites & keep locally
+    sites = get_sites(cookie)
 
     print("Sleeping for 5 seconds to ensure the sites get loaded first")
     time.sleep(5)
