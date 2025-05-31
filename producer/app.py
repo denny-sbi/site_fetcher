@@ -314,7 +314,7 @@ class SiteFetcher:
             print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
             return None
 
-    def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date, logger):
+    def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
         '''Function to fetch metrics and push to kafka topic'''
 
         # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
@@ -327,7 +327,7 @@ class SiteFetcher:
 
         if not hardwares:
             print(f"[{metric}] No hardware retrieved for site {site_id} {site_name}")
-            logger.log_site(site_id, site_name, metric, [], "fail", f"No hardware retrieved for metric: {metric}")
+            # logger.log_site(site_id, site_name, metric, [], "fail", f"No hardware retrieved for metric: {metric}")
             return
         else:
             hardware_by_type = self.get_types(hardwares)
@@ -339,18 +339,18 @@ class SiteFetcher:
             hw_ids = [hw["id"] for hw in hardware_list]
             hw_ids_str = ",".join(map(str, hw_ids))
             try:
-                chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, from_date, to_date, self.cookie)
+                chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, from_date, to_date)
                 if chart_data:
                     self.producer.produce('hardware_metrics', value=chart_data, callback=self.kafka_callback)
                     self.producer.flush()
                     print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
-                    logger.log_site(site_id, site_name, metric, [], "success")
+                    # logger.log_site(site_id, site_name, metric, [], "success")
                 else:
                     print(f"Received empty response for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
-                    logger.log_site(site_id, site_name, metric, hw_ids, "null", f"Empty response for metric {metric}")	
+                    # logger.log_site(site_id, site_name, metric, hw_ids, "null", f"Empty response for metric {metric}")	
             except Exception as e:
                 print(f"error fetching custom metric data for {metric} for site {site_id} {site_name}, hardware {hw_ids}: {e}")
-                logger.log_site(site_id, site_name, metric, hw_ids, "fail", f"{metric} error: {e}")
+                # logger.log_site(site_id, site_name, metric, hw_ids, "fail", f"{metric} error: {e}")
                 return
         return
 
