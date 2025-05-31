@@ -173,7 +173,7 @@ class SiteFetcher:
             print(f'bad response from site info for site {site_id}')
             return
 
-    def produce_site_info(self, site_id, site_name):
+    def produce_sites(self, site_id, site_name):
             try:
                 site_data = self.get_site_info(self.cookie, site_id)
             except Exception as e:
@@ -385,7 +385,7 @@ class SiteFetcher:
                 # logger.log_site(site_id, site_name, "all", [], "fail", f"Hardware fetch error: {e}")
                 continue
 
-            self.produce_site_info(site_id, site_name)  # Push information for site
+            self.produce_sites(site_id, site_name)  # Push information for site
             self.produce_hardware(hardwares)  # Push hardware associated with site
 
             # Loop through every metric and produce for that site
