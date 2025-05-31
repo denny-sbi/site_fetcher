@@ -1,12 +1,12 @@
-import random
 import requests
-import time
-from datetime import datetime, timedelta
+import uuid
 import json
+from datetime import datetime, timedelta
 from confluent_kafka import Producer
 
 class SiteFetcher:
     def __init__(self):
+
         # Custom chart IDs for AlsoEnergy
         self.CUSTOM_CHART_IDS = {
             "Production meter net energy": "Energy",
@@ -50,6 +50,9 @@ class SiteFetcher:
             "POA Sensor":          "IncludePOA,Sensor",
         }
 
+        self.RUN_ID = str(uuid.uuid4())
+        self.process = 'daily'  # TODO, detect if backfill and change process type
+
         self.read_credentials()
 
         try:
@@ -65,6 +68,17 @@ class SiteFetcher:
         }
 
         self.producer = Producer(producer_config)
+
+        run_info = json.dumps({
+            'timestamp': str(datetime.now()),
+            'runID': self.RUN_ID,
+            'process': self.process,
+            'event': 'start'
+
+        })
+
+        self.producer.produce('solarbi_runs', value=run_info, callback=self.kafka_callback)  # Push Run start to Kafka
+        self.producer.flush()
 
 
     def read_credentials(self):
@@ -358,43 +372,73 @@ class SiteFetcher:
             TODO: Backfill functionality
         '''
 
-        # TODO backfill logic
-        today = datetime.now()
-        yesterday = today - timedelta(days=1)
 
-        # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
-        start_date = yesterday.strftime("%Y-%m-%d")  # Midnight yesterday
-        end_date = today.strftime("%Y-%m-%d")  # Midnight now
+        try:
 
-        sites_raw = self.get_sites()  # API call to grab list of sites
-        self.produce_site_list(sites_raw)  # Push site list to kafka feed
-        sites = json.loads(sites_raw)['items']
 
-        metrics = list(self.METRIC_HARDWARE_MAP.keys())  # List of metrics we are collecting
-        # logger = LogWriter()
-        
-        for site in sites:
-            site_id = site['siteId']
-            site_name = site['siteName']
+            # TODO backfill logic
+            today = datetime.now()
+            yesterday = today - timedelta(days=1)
 
-            # Get hardware for that site
-            try:
-                hardwares = self.get_site_hardware(site_id, site_name)
-            except Exception as e:
-                print(f"error fetching site hardware for site {site_id} {site_name}")
-                print(e)
-                # logger.log_site(site_id, site_name, "all", [], "fail", f"Hardware fetch error: {e}")
-                continue
+            # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
+            start_date = yesterday.strftime("%Y-%m-%d")  # Midnight yesterday
+            end_date = today.strftime("%Y-%m-%d")  # Midnight now
 
-            self.produce_sites(site_id, site_name)  # Push information for site
-            self.produce_hardware(hardwares)  # Push hardware associated with site
+            sites_raw = self.get_sites()  # API call to grab list of sites
+            self.produce_site_list(sites_raw)  # Push site list to kafka feed
+            sites = json.loads(sites_raw)['items']
 
-            # Loop through every metric and produce for that site
-            for metric in metrics:
-                self.produce_hardware_metrics(metric, site, hardwares, start_date, end_date)
+            metrics = list(self.METRIC_HARDWARE_MAP.keys())  # List of metrics we are collecting
+            # logger = LogWriter()
+            
+            for site in sites:
+                site_id = site['siteId']
+                site_name = site['siteName']
 
-                # Write the log to a sheet
-                # logger.write_sheet(start_date, end_date)
+                # Get hardware for that site
+                try:
+                    hardwares = self.get_site_hardware(site_id, site_name)
+                except Exception as e:
+                    print(f"error fetching site hardware for site {site_id} {site_name}")
+                    print(e)
+                    # logger.log_site(site_id, site_name, "all", [], "fail", f"Hardware fetch error: {e}")
+                    continue
+
+                self.produce_sites(site_id, site_name)  # Push information for site
+                self.produce_hardware(hardwares)  # Push hardware associated with site
+
+                # Loop through every metric and produce for that site
+                for metric in metrics:
+                    self.produce_hardware_metrics(metric, site, hardwares, start_date, end_date)
+
+                    # Write the log to a sheet
+                    # logger.write_sheet(start_date, end_date)
+                
+
+        except Exception as e:
+            run_info = json.dumps({
+                'timestamp': str(datetime.now()),
+                'runID': self.RUN_ID,
+                'process': self.process,
+                'event': 'failure'
+            })
+            self.producer.produce('solarbi_runs', value=run_info, callback=self.kafka_callback)  # Push Run failure to Kafka
+            self.producer.flush()
+            exit()
+          
+        # Done
+        run_info = json.dumps({
+            'timestamp': str(datetime.now()),
+            'runID': self.RUN_ID,
+            'process': self.process,
+            'event': 'finish'
+
+        })
+
+        self.producer.produce('solarbi_runs', value=run_info, callback=self.kafka_callback)  # Push Run end to Kafka
+        self.producer.flush()
+
+
 	
 
 def main():
