@@ -154,14 +154,14 @@ class SiteFetcher:
 
 
 
-    def get_site_info(self, cookie, site_id):
+    def get_site_info(self, site_id):
         '''Fetch site info from also energy, requires session cookie and site id'''
         url = f"https://api.alsoenergy.com/Sites/{site_id}?includeProductionData=false"
         payload = {}
 
         headers = {
             'accept': 'application/json',
-            'Cookie': cookie
+            'Cookie': self.cookie
         }
 
         response = requests.request("GET", url, headers=headers, data=payload)
@@ -175,7 +175,7 @@ class SiteFetcher:
 
     def produce_sites(self, site_id, site_name):
             try:
-                site_data = self.get_site_info(self.cookie, site_id)
+                site_data = self.get_site_info(site_id)
             except Exception as e:
                 print(f"error fetching site info for site {site_id} {site_name}")
                 print(e)
@@ -228,7 +228,7 @@ class SiteFetcher:
         '''Function to fetch site list and push to kafka topic'''
         try:
             # Push data to Kafka topic
-            self.producer.produce('sites', value=sites, callback=self.kafka_callback)
+            self.producer.produce('sites_list', value=sites, callback=self.kafka_callback)
             
             # Flush any pending messages to Kafka
             self.producer.flush()
@@ -317,9 +317,7 @@ class SiteFetcher:
     def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
         '''Function to fetch metrics and push to kafka topic'''
 
-        # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
-        from_date = start_date.strftime("%Y-%m-%d")
-        to_date = end_date.strftime("%Y-%m-%d")
+
 
         site_id = site['siteId']
         site_name = site['siteName']
@@ -339,7 +337,7 @@ class SiteFetcher:
             hw_ids = [hw["id"] for hw in hardware_list]
             hw_ids_str = ",".join(map(str, hw_ids))
             try:
-                chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, from_date, to_date)
+                chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, start_date, end_date)
                 if chart_data:
                     self.producer.produce('hardware_metrics', value=chart_data, callback=self.kafka_callback)
                     self.producer.flush()
@@ -361,12 +359,15 @@ class SiteFetcher:
         '''
 
         # TODO backfill logic
-        start_date = datetime.now() - timedelta(days=1) # midnight yesterday
-        end_date = datetime.now() # midnight today
+        today = datetime.now()
+        yesterday = today - timedelta(days=1)
 
+        # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
+        start_date = yesterday.strftime("%Y-%m-%d")  # Midnight yesterday
+        end_date = today.strftime("%Y-%m-%d")  # Midnight now
 
         sites_raw = self.get_sites()  # API call to grab list of sites
-        # self.produce_site_list(sites_raw)  # Push site list to kafka feed
+        self.produce_site_list(sites_raw)  # Push site list to kafka feed
         sites = json.loads(sites_raw)['items']
 
         metrics = list(self.METRIC_HARDWARE_MAP.keys())  # List of metrics we are collecting
