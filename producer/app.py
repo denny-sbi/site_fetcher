@@ -183,7 +183,7 @@ class SiteFetcher:
 
             try:
                 # Push data to Kafka topic
-                self.producer.produce('site_info', value=site_data, callback=self.kafka_callback)
+                self.producer.produce('sites', value=site_data, callback=self.kafka_callback)
                 # Flush any pending messages to Kafka
                 self.producer.flush()
             except KeyboardInterrupt:
@@ -341,7 +341,7 @@ class SiteFetcher:
             try:
                 chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, from_date, to_date, self.cookie)
                 if chart_data:
-                    self.producer.produce('custom_metric_data', value=chart_data, callback=self.kafka_callback)
+                    self.producer.produce('hardware_metrics', value=chart_data, callback=self.kafka_callback)
                     self.producer.flush()
                     print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
                     logger.log_site(site_id, site_name, metric, [], "success")
