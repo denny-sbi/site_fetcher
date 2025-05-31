@@ -3,6 +3,8 @@ import uuid
 import json
 from datetime import datetime, timedelta
 from confluent_kafka import Producer
+from solarbi import SolarBIComms
+
 
 class SiteFetcher:
     def __init__(self):
@@ -68,6 +70,8 @@ class SiteFetcher:
         }
 
         self.producer = Producer(producer_config)
+
+        self.comms = SolarBIComms(self.producer, self.RUN_ID)
 
         run_info = json.dumps({
             'timestamp': str(datetime.now()),
@@ -155,6 +159,7 @@ class SiteFetcher:
             response.raise_for_status()
         except requests.RequestException as e:
             print(f"[get_sites] error fetching sites: {e}")
+            self.comms.record_comms_event('Site List', -1, 'Site List', 'HTTP Error')
             return None
 
         try:
@@ -164,6 +169,8 @@ class SiteFetcher:
             return response.text
         except ValueError as e:
             print(f"[get_sites] invalid JSON response: {e}")
+            self.comms.record_comms_event('Site List', -1, 'Site List', 'Parsing Error')
+
             return None
 
 
@@ -185,6 +192,8 @@ class SiteFetcher:
             
         else:
             print(f'bad response from site info for site {site_id}')
+
+            self.comms.record_comms_event('Site', site_id, 'Site Info', 'HTTP Error')
             return
 
     def produce_sites(self, site_id, site_name):
@@ -192,6 +201,8 @@ class SiteFetcher:
                 site_data = self.get_site_info(site_id)
             except Exception as e:
                 print(f"error fetching site info for site {site_id} {site_name}")
+                self.comms.record_comms_event('Site', site_id, 'Site Info', 'Parsing Error')
+
                 print(e)
                 return
 
@@ -219,11 +230,13 @@ class SiteFetcher:
             response = response.json()
             response['site_id'] = site_id
             response['site_name'] = site_name
-
+            response['recordDate'] = str(datetime.now())
             return json.dumps(response)
         
         else:
             print(f'bad response from site hardware for site {site_id}')
+            self.comms.record_comms_event('Site', site_id, 'Site Hardware', 'HTTP Error')
+
             return
 
     def produce_hardware(self, hardwares):
@@ -324,8 +337,13 @@ class SiteFetcher:
             data["hardware_ids"] = hw_ids
             data["metric"] = metric_key
             return json.dumps(data)
-        else:
+        elif response.status_code != 204:
             print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
+
+            for hw_id in hw_ids.split(","):
+
+                if hw_id is not None and hw_id != '':
+                    self.comms.record_comms_event('Hardware', hw_id, metric_key, 'HTTP Error')
             return None
 
     def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
