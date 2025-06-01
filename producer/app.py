@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from confluent_kafka import Producer
 from solarbi import SolarBIComms
-
+from utils import kafka_callback, get_retrying_session
 
 class SiteFetcher:
     def __init__(self):
@@ -57,6 +57,8 @@ class SiteFetcher:
 
         self.read_credentials()
 
+        self.session = get_retrying_session()
+
         try:
             self.cookie = self.authenticate()
         except Exception as e:
@@ -81,7 +83,7 @@ class SiteFetcher:
 
         })
 
-        self.producer.produce('solarbi_runs', value=run_info, callback=self.kafka_callback)  # Push Run start to Kafka
+        self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run start to Kafka
         self.producer.flush()
 
 
@@ -93,13 +95,6 @@ class SiteFetcher:
         self.email = secrets['email']
         self.password = secrets['password']
 
-
-    def kafka_callback(self, err, msg):
-        ''' Helper function for kafka to callback'''
-        if err is not None:
-            print(f"Message delivery failed: {err}")
-        else:
-            print(f"Message delivered to {msg.topic} partition {msg.partition} with offset {msg.offset}")
 
     def authenticate(self):
         """
@@ -121,7 +116,7 @@ class SiteFetcher:
             }
             files = []
             
-            response = requests.post(url, headers=headers, data=payload, files=files)
+            response = self.session.post(url, headers=headers, data=payload, files=files)
             # check if the response is ok
             if response.status_code == requests.codes.ok:
                 #logger.debug("Got Expected Response. Authentication successful ✅")
@@ -155,11 +150,11 @@ class SiteFetcher:
         }
 
         try:
-            response = requests.get(url, headers=headers)
+            response = self.session.request("GET", url, headers=headers)
             response.raise_for_status()
         except requests.RequestException as e:
             print(f"[get_sites] error fetching sites: {e}")
-            self.comms.record_comms_event('Site List', -1, 'Site List', 'HTTP Error')
+            self.comms.record_comms_event('Site List', -1, 'Site List', f'HTTP Error - {response.status_code}')
             return None
 
         try:
@@ -185,7 +180,7 @@ class SiteFetcher:
             'Cookie': self.cookie
         }
 
-        response = requests.request("GET", url, headers=headers, data=payload)
+        response = self.session.request("GET", url, headers=headers, data=payload)
 
         if response.status_code == requests.codes.ok:
             return response.text
@@ -193,7 +188,7 @@ class SiteFetcher:
         else:
             print(f'bad response from site info for site {site_id}')
 
-            self.comms.record_comms_event('Site', site_id, 'Site Info', 'HTTP Error')
+            self.comms.record_comms_event('Site', site_id, 'Site Info', f'HTTP Error - {response.status_code}')
             return
 
     def produce_sites(self, site_id, site_name):
@@ -208,7 +203,7 @@ class SiteFetcher:
 
             try:
                 # Push data to Kafka topic
-                self.producer.produce('sites', value=site_data, callback=self.kafka_callback)
+                self.producer.produce('sites', value=site_data, callback=kafka_callback)
                 # Flush any pending messages to Kafka
                 self.producer.flush()
             except KeyboardInterrupt:
@@ -224,7 +219,7 @@ class SiteFetcher:
             'Cookie': self.cookie
         }
 
-        response = requests.request("GET", url, headers=headers, data=payload)
+        response = self.session.request("GET", url, headers=headers, data=payload)
 
         if response.status_code == requests.codes.ok:
             response = response.json()
@@ -235,7 +230,7 @@ class SiteFetcher:
         
         else:
             print(f'bad response from site hardware for site {site_id}')
-            self.comms.record_comms_event('Site', site_id, 'Site Hardware', 'HTTP Error')
+            self.comms.record_comms_event('Site', site_id, 'Site Hardware', f'HTTP Error - {response.status_code}')
 
             return
 
@@ -244,7 +239,7 @@ class SiteFetcher:
             return
         try:
             # Push data to Kafka topic
-            self.producer.produce('hardware', value=hardwares, callback=self.kafka_callback)
+            self.producer.produce('hardware', value=hardwares, callback=kafka_callback)
             # Flush any pending messages to Kafka
             self.producer.flush()
         except KeyboardInterrupt:
@@ -255,7 +250,7 @@ class SiteFetcher:
         '''Function to fetch site list and push to kafka topic'''
         try:
             # Push data to Kafka topic
-            self.producer.produce('sites_list', value=sites, callback=self.kafka_callback)
+            self.producer.produce('sites_list', value=sites, callback=kafka_callback)
             
             # Flush any pending messages to Kafka
             self.producer.flush()
@@ -329,7 +324,7 @@ class SiteFetcher:
             "selectedOptions": self.SELECTED_OPTIONS_BY_METRIC.get(metric_key)
         }
         
-        response = requests.request("GET", url, headers=headers, params=params)
+        response = self.session.request("GET", url, headers=headers, params=params)
         if response.status_code == requests.codes.ok:
             data = response.json()
             data["site_id"] = site_id
@@ -343,7 +338,7 @@ class SiteFetcher:
             for hw_id in hw_ids.split(","):
 
                 if hw_id is not None and hw_id != '':
-                    self.comms.record_comms_event('Hardware', hw_id, metric_key, 'HTTP Error')
+                    self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
             return None
 
     def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
@@ -371,8 +366,11 @@ class SiteFetcher:
             try:
                 chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, start_date, end_date)
                 if chart_data:
-                    self.producer.produce('hardware_metrics', value=chart_data, callback=self.kafka_callback)
+                    self.producer.produce('hardware_metrics', value=chart_data, callback=kafka_callback)
                     self.producer.flush()
+
+                    self.comms.record_comms_event('Site', site_id, metric, f'Successful insertion')
+
                     print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
                     # logger.log_site(site_id, site_name, metric, [], "success")
                 else:
@@ -423,7 +421,10 @@ class SiteFetcher:
                     continue
 
                 self.produce_sites(site_id, site_name)  # Push information for site
+                self.comms.record_comms_event('Site', site_id, 'Site Info', f'Successful insertion')
+
                 self.produce_hardware(hardwares)  # Push hardware associated with site
+                self.comms.record_comms_event('Site', site_id, 'Hardware Associations', f'Successful insertion')
 
                 # Loop through every metric and produce for that site
                 for metric in metrics:
@@ -434,13 +435,14 @@ class SiteFetcher:
                 
 
         except Exception as e:
+            print(e)
             run_info = json.dumps({
                 'timestamp': str(datetime.now()),
                 'runID': self.RUN_ID,
                 'process': self.process,
                 'event': 'failure'
             })
-            self.producer.produce('solarbi_runs', value=run_info, callback=self.kafka_callback)  # Push Run failure to Kafka
+            self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run failure to Kafka
             self.producer.flush()
             exit()
           
@@ -453,7 +455,7 @@ class SiteFetcher:
 
         })
 
-        self.producer.produce('solarbi_runs', value=run_info, callback=self.kafka_callback)  # Push Run end to Kafka
+        self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run end to Kafka
         self.producer.flush()
 
 
