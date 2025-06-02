@@ -313,6 +313,7 @@ class SiteFetcher:
             'Cookie': self.cookie
         }
 
+        #TODO: For meters and inverters (ie "Net Production Meter" and "Net Production Energy"), we need to get the production for each indvidual hardware ID
         params = {
             "startTime": f"{start_date}T00:00:00",
             "endTime": f"{end_date}T00:00:00",
