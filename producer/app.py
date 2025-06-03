@@ -313,8 +313,8 @@ class SiteFetcher:
             'Cookie': self.cookie
         }
 
-        #For meters and inverters (ie "Net Production Meter" and "Net Production Energy"), we need to get the production for each indvidual hardware ID
-        print(hw_ids)
+        # For certain metrics, we need to get the production for each indvidual hardware ID
+        # This avoids AlsoEnergy API summing it for us
         hw_groups = []
         if metric_key in ("Production meter net energy", "Inverter net energy", "Estimated Production"):
             hw_groups = [str(x) for x in hw_ids.split(',')]  # Separate API calls
