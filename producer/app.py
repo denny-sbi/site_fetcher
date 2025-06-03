@@ -313,34 +313,43 @@ class SiteFetcher:
             'Cookie': self.cookie
         }
 
-        #TODO: For meters and inverters (ie "Net Production Meter" and "Net Production Energy"), we need to get the production for each indvidual hardware ID
-        params = {
-            "startTime": f"{start_date}T00:00:00",
-            "endTime": f"{end_date}T00:00:00",
-            "span": "Custom",
-            "binSize": "Bin15Min",
-            "aggregationMode": "BySite",
-            "hardwareIds": str(hw_ids),
-            "lineType": "Line",
-            "selectedOptions": self.SELECTED_OPTIONS_BY_METRIC.get(metric_key)
-        }
-        
-        response = self.session.request("GET", url, headers=headers, params=params)
-        if response.status_code == requests.codes.ok:
-            data = response.json()
-            data["site_id"] = site_id
-            data["site_name"] = site_name
-            data["hardware_ids"] = hw_ids
-            data["metric"] = metric_key
-            return json.dumps(data)
-        elif response.status_code != 204:
-            print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
+        #For meters and inverters (ie "Net Production Meter" and "Net Production Energy"), we need to get the production for each indvidual hardware ID
+        print(hw_ids)
+        hw_groups = []
+        if metric_key in ("Production meter net energy", "Inverter net energy", "Estimated Production"):
+            hw_groups = [str(x) for x in hw_ids.split(',')]  # Separate API calls
+        else:
+            hw_groups = [hw_ids]
 
-            for hw_id in hw_ids.split(","):
+        # Form a call for each group necessary 
+        for hw_ids in hw_groups:
+            params = {
+                "startTime": f"{start_date}T00:00:00",
+                "endTime": f"{end_date}T00:00:00",
+                "span": "Custom",
+                "binSize": "Bin15Min",
+                "aggregationMode": "BySite",
+                "hardwareIds": str(hw_ids),
+                "lineType": "Line",
+                "selectedOptions": self.SELECTED_OPTIONS_BY_METRIC.get(metric_key)
+            }
+            
+            response = self.session.request("GET", url, headers=headers, params=params)
+            if response.status_code == requests.codes.ok:
+                data = response.json()
+                data["site_id"] = site_id
+                data["site_name"] = site_name
+                data["hardware_ids"] = hw_ids
+                data["metric"] = metric_key
+                return json.dumps(data)
+            elif response.status_code != 204:
+                print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
 
-                if hw_id is not None and hw_id != '':
-                    self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
-            return None
+                for hw_id in hw_ids.split(","):
+
+                    if hw_id is not None and hw_id != '':
+                        self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
+                return None
 
     def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
         '''Function to fetch metrics and push to kafka topic'''
