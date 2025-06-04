@@ -344,6 +344,7 @@ class SiteFetcher:
                 return json.dumps(data)
             elif response.status_code != 204:
                 print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
+                self.comms.record_comms_event('Site', site_id, metric_key, f'HTTP Error - {response.status_code}')
 
                 for hw_id in hw_ids.split(","):
 
