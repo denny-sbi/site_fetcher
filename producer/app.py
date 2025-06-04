@@ -451,7 +451,7 @@ class SiteFetcher:
                 'timestamp': str(datetime.now()),
                 'runID': self.RUN_ID,
                 'process': self.process,
-                'event': 'failure'
+                'event': 'failed'
             })
             self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run failure to Kafka
             self.producer.flush()
@@ -462,7 +462,7 @@ class SiteFetcher:
             'timestamp': str(datetime.now()),
             'runID': self.RUN_ID,
             'process': self.process,
-            'event': 'finish'
+            'event': 'finished'
 
         })
 
