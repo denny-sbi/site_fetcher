@@ -313,44 +313,34 @@ class SiteFetcher:
             'Cookie': self.cookie
         }
 
-        # For certain metrics, we need to get the production for each indvidual hardware ID
-        # This avoids AlsoEnergy API summing it for us
-        hw_groups = []
-        if metric_key in ("Production meter net energy", "Inverter net energy", "Estimated Production"):
-            hw_groups = [str(x) for x in hw_ids.split(',')]  # Separate API calls
-        else:
-            hw_groups = [hw_ids]
+        params = {
+            "startTime": f"{start_date}T00:00:00",
+            "endTime": f"{end_date}T00:00:00",
+            "span": "Custom",
+            "binSize": "Bin15Min",
+            "aggregationMode": "BySite",
+            "hardwareIds": str(hw_ids),
+            "lineType": "Line",
+            "selectedOptions": self.SELECTED_OPTIONS_BY_METRIC.get(metric_key)
+        }
+        
+        response = self.session.request("GET", url, headers=headers, params=params)
+        if response.status_code == requests.codes.ok:
+            data = response.json()
+            data["site_id"] = site_id
+            data["site_name"] = site_name
+            data["hardware_ids"] = hw_ids
+            data["metric"] = metric_key
+            return json.dumps(data)
+        elif response.status_code != 204:
+            print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
+            self.comms.record_comms_event('Site', site_id, metric_key, f'HTTP Error - {response.status_code}')
 
-        # Form a call for each group necessary 
-        for hw_ids in hw_groups:
-            params = {
-                "startTime": f"{start_date}T00:00:00",
-                "endTime": f"{end_date}T00:00:00",
-                "span": "Custom",
-                "binSize": "Bin15Min",
-                "aggregationMode": "BySite",
-                "hardwareIds": str(hw_ids),
-                "lineType": "Line",
-                "selectedOptions": self.SELECTED_OPTIONS_BY_METRIC.get(metric_key)
-            }
-            
-            response = self.session.request("GET", url, headers=headers, params=params)
-            if response.status_code == requests.codes.ok:
-                data = response.json()
-                data["site_id"] = site_id
-                data["site_name"] = site_name
-                data["hardware_ids"] = hw_ids
-                data["metric"] = metric_key
-                return json.dumps(data)
-            elif response.status_code != 204:
-                print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
-                self.comms.record_comms_event('Site', site_id, metric_key, f'HTTP Error - {response.status_code}')
+            for hw_id in hw_ids.split(","):
 
-                for hw_id in hw_ids.split(","):
-
-                    if hw_id is not None and hw_id != '':
-                        self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
-                return None
+                if hw_id is not None and hw_id != '':
+                    self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
+            return None
 
     def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
         '''Function to fetch metrics and push to kafka topic'''
@@ -373,20 +363,31 @@ class SiteFetcher:
                 hardware_list.extend(hardware_by_type.get(cat, []))
             
             hw_ids = [hw["id"] for hw in hardware_list]
-            hw_ids_str = ",".join(map(str, hw_ids))
+
             try:
-                chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, start_date, end_date)
-                if chart_data:
-                    self.producer.produce('hardware_metrics', value=chart_data, callback=kafka_callback)
-                    self.producer.flush()
-
-                    self.comms.record_comms_event('Site', site_id, metric, f'Successful insertion')
-
-                    print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
-                    # logger.log_site(site_id, site_name, metric, [], "success")
+                # For certain metrics, we need to get the production for each indvidual hardware ID
+                # This avoids AlsoEnergy API summing it for us
+                hw_groups = []
+                if metric in ("Production meter net energy", "Inverter net energy", "Estimated Production"):
+                    hw_groups = [[x] for x in hw_ids]  # Separate API calls
                 else:
-                    print(f"Received empty response for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
-                    # logger.log_site(site_id, site_name, metric, hw_ids, "null", f"Empty response for metric {metric}")	
+                    hw_groups = [hw_ids]
+
+                # Form a call for each group necessary 
+                for hw_ids in hw_groups:
+                    hw_ids_str = ",".join([str(x) for x in hw_ids])
+                    chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, start_date, end_date)
+                    if chart_data:
+                        self.producer.produce('hardware_metrics', value=chart_data, callback=kafka_callback)
+                        self.producer.flush()
+
+                        self.comms.record_comms_event('Site', site_id, metric, f'Successful insertion')
+
+                        print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
+                        # logger.log_site(site_id, site_name, metric, [], "success")
+                    else:
+                        print(f"Received empty response for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
+                        # logger.log_site(site_id, site_name, metric, hw_ids, "null", f"Empty response for metric {metric}")	
             except Exception as e:
                 print(f"error fetching custom metric data for {metric} for site {site_id} {site_name}, hardware {hw_ids}: {e}")
                 # logger.log_site(site_id, site_name, metric, hw_ids, "fail", f"{metric} error: {e}")
