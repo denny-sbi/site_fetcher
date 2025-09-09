@@ -15,6 +15,24 @@ sudo docker compose up --build -d
 ### What is this image responsible for?
 The goal of this image is to fetch data reliant on a site id. This data is less likely to change within the timeframe of a day, so it will exit after it completes the fetch. This will allow the container to be deployed at whatever frequency required.
 
+### Running Historical Backfill
+To run the site fetcher for historical data, you can specify a date range:
+
+```bash
+# Using the convenience script
+./run_backfill.sh 2025-08-01 2025-08-09
+
+# Or directly with docker run
+docker run --rm \
+    --network telemetry-net \
+    -v $(pwd)/secrets.json:/app/secrets.json \
+    -e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+    site_fetcher-producer:latest \
+    python app.py --start-date 2025-08-01 --end-date 2025-08-09
+```
+
+The dates should be in YYYY-MM-DD format. If no dates are provided, it defaults to yesterday's data.
+
 
 ## Site Fetcher
 The Site Fetcher is a data collection service developed by Solar BI that:

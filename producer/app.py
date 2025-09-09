@@ -1,6 +1,7 @@
 import requests
 import uuid
 import json
+import argparse
 from datetime import datetime, timedelta
 from confluent_kafka import Producer
 from solarbi import SolarBIComms
@@ -397,21 +398,38 @@ class SiteFetcher:
     def get_data(self, start_date=None, end_date=None):
         ''' Function to handle logic of grabbing data from AlsoEnergy
         
-            TODO: Backfill functionality
+            Args:
+                start_date (str): Start date in YYYY-MM-DD format (default: yesterday)
+                end_date (str): End date in YYYY-MM-DD format (default: today)
         '''
 
 
         try:
 
+            # Use provided dates or default to yesterday
+            if start_date is None or end_date is None:
+                today = datetime.now()
+                yesterday = today - timedelta(days=1)
+                start_date = yesterday.strftime("%Y-%m-%d")  # Midnight yesterday
+                end_date = today.strftime("%Y-%m-%d")  # Midnight now
+                self.process = 'daily'
+            else:
+                # Validate date format
+                try:
+                    datetime.strptime(start_date, "%Y-%m-%d")
+                    datetime.strptime(end_date, "%Y-%m-%d")
+                except ValueError:
+                    raise ValueError("Dates must be in YYYY-MM-DD format")
+                
+                # Update process type for backfill
+                self.process = 'backfill'
 
-            # TODO backfill logic
-            today = datetime.now()
-            yesterday = today - timedelta(days=1)
+            # TODO: differentiate between daily and backfill processes
+            # daily process should run with for yesterday
+            # the backfill process should loop through the dates in the date range
+            # and produce data for each date
 
-            # Format the dates in the required format (e.g., 2025-03-01T00%3A00%3A00)
-            start_date = yesterday.strftime("%Y-%m-%d")  # Midnight yesterday
-            end_date = today.strftime("%Y-%m-%d")  # Midnight now
-
+                
             sites_raw = self.get_sites()  # API call to grab list of sites
             self.produce_site_list(sites_raw)  # Push site list to kafka feed
             sites = json.loads(sites_raw)['items']
@@ -432,6 +450,7 @@ class SiteFetcher:
                     # logger.log_site(site_id, site_name, "all", [], "fail", f"Hardware fetch error: {e}")
                     continue
 
+                # TODO: add dates
                 self.produce_sites(site_id, site_name)  # Push information for site
                 self.comms.record_comms_event('Site', site_id, 'Site Info', f'Successful insertion')
 
@@ -440,7 +459,13 @@ class SiteFetcher:
 
                 # Loop through every metric and produce for that site
                 for metric in metrics:
-                    self.produce_hardware_metrics(metric, site, hardwares, start_date, end_date)
+                    if self.process == 'backfill':
+                        for date in range(start_date, end_date):
+                            logger.info(f"Producing {metric} for {site_id} {site_name} for date {date - timedelta(days=1)} to {date}")
+                            self.produce_hardware_metrics(metric, site, hardwares, date - timedelta(days=1), date)
+                    else:
+                        logger.info(f"Producing {metric} for {site_id} {site_name} for date {start_date} to {end_date}")
+                        self.produce_hardware_metrics(metric, site, hardwares, start_date, end_date)
 
                     # Write the log to a sheet
                     # logger.write_sheet(start_date, end_date)
@@ -475,11 +500,17 @@ class SiteFetcher:
 
 def main():
     '''entrypoint'''
+    
+    parser = argparse.ArgumentParser(description='Solar BI Site Fetcher - Fetch data from AlsoEnergy API')
+    parser.add_argument('--start-date', type=str, help='Start date in YYYY-MM-DD format (default: yesterday)')
+    parser.add_argument('--end-date', type=str, help='End date in YYYY-MM-DD format (default: today)')
+    
+    args = parser.parse_args()
 
-    fetcher = SiteFetcher()  # Iniitialize object
+    fetcher = SiteFetcher()  # Initialize object
 
-    # TODO take date range
-    fetcher.get_data()  # Perform data extraction
+    # Perform data extraction with optional date range
+    fetcher.get_data(start_date=args.start_date, end_date=args.end_date)
 
 
 if __name__ == '__main__':
