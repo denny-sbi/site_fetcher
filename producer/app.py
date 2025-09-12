@@ -7,8 +7,14 @@ from confluent_kafka import Producer
 from solarbi import SolarBIComms
 from utils import kafka_callback, get_retrying_session
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 class SiteFetcher:
-    def __init__(self):
+    def __init__(self, use_kafka=True):
+        '''Initialize the SiteFetcher object, setting up authentication and Kafka producer if needed'''
 
         # Custom chart IDs for AlsoEnergy
         self.CUSTOM_CHART_IDS = {
@@ -56,6 +62,8 @@ class SiteFetcher:
         self.RUN_ID = str(uuid.uuid4())
         self.process = 'daily'  # TODO, detect if backfill and change process type
 
+        
+
         self.read_credentials()
 
         self.session = get_retrying_session()
@@ -67,31 +75,62 @@ class SiteFetcher:
             print(e)
 
         # Set up Kafka producer
-        producer_config = {
-            'bootstrap.servers': 'kafka:9092',  # containerized networking
-            'client.id': 'python-producer'
-        }
+        self.use_kafka = use_kafka
 
-        self.producer = Producer(producer_config)
+        if self.use_kafka:
+            print("Kafka producer enabled, initializing producer...")
+            producer_config = {
+                'bootstrap.servers': 'kafka:9092',  # containerized networking
+                'client.id': 'python-producer'
+            }
 
-        self.comms = SolarBIComms(self.producer, self.RUN_ID)
+            self.producer = Producer(producer_config)
+            
+            self.comms = SolarBIComms(self.producer, self.RUN_ID)
 
-        run_info = json.dumps({
-            'timestamp': str(datetime.now()),
-            'runID': self.RUN_ID,
-            'process': self.process,
-            'event': 'start'
+            run_info = json.dumps({
+                'timestamp': str(datetime.now()),
+                'runID': self.RUN_ID,
+                'process': self.process,
+                'event': 'start'
 
-        })
+            })
 
-        self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run start to Kafka
-        self.producer.flush()
+            self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run start to Kafka
+            self.producer.flush()
+        
+        else:
+            print("Kafka producer disabled, running without Kafka...")
+            self.producer = None
+            self.comms = None
+
+            
 
 
     def read_credentials(self):
         # Read secrets
-        with open('/app/secrets.json', 'r') as f:
-            secrets = json.load(f)
+        
+        # check if the app/secrets.json file exists and read the email and password from it
+        # otherwise, look in ../secrets.json for the file and read from there
+        # otherwise, raise an exception that the secrets file could not be found
+        secrets = {}
+        print("Reading secrets from /app/secrets.json...")
+        
+        print("If this fails, ensure that the secrets file is mounted correctly in the container.")
+        print("If running locally, ensure that the secrets file is in the correct location.")
+        print("If running in production, ensure that the secrets file is mounted correctly in the container and that the path is correct.")
+        try:
+            with open('/app/secrets.json', 'r') as f:
+                secrets = json.load(f)
+        except Exception as e:
+            print("Error reading secrets file: ", e)
+            print("Attempting to read secrets file from ../secrets.json...")
+            try:
+                with open('./secrets.json', 'r') as f:
+                    secrets = json.load(f)
+            except Exception as e:
+                print("Error reading secrets file: ", e)
+                raise FileNotFoundError("Secrets file not found")
 
         self.email = secrets['email']
         self.password = secrets['password']
@@ -118,25 +157,26 @@ class SiteFetcher:
             files = []
             
             response = self.session.post(url, headers=headers, data=payload, files=files)
+            print(f"Authentication response status code: {response.status_code}, headers: {headers}, payload: {payload} ")
             # check if the response is ok
             if response.status_code == requests.codes.ok:
-                #logger.debug("Got Expected Response. Authentication successful ✅")
+                logger.debug("Got Expected Response. Authentication successful ✅")
                 # get the access token and token type from the response
                 access_token = response.json().get('access_token')
                 token_type = response.json().get('token_type')
                 # check if the access token is not None
                 if access_token is None:
-                    #logger.error("Access token is null ❌")
+                    logger.error("Access token is null ❌")
                     print("access token is Null")
                     raise Exception()
                 # combine the access token and the token type into a cookie
                 cookie = f"AlsoEnergyApiSessionCookie={token_type}%20{access_token}"
                 return cookie
             else:
-                #logger.error("Authentication failed ❌")
+                logger.error("Authentication failed ❌")
                 return response.status_code
         except Exception as e:
-            #logger.info(f"Error: {e}")
+            logger.info(f"Error: {e}")
             raise Exception()
 
 
@@ -155,7 +195,8 @@ class SiteFetcher:
             response.raise_for_status()
         except requests.RequestException as e:
             print(f"[get_sites] error fetching sites: {e}")
-            self.comms.record_comms_event('Site List', -1, 'Site List', f'HTTP Error - {response.status_code}')
+            if self.comms:
+                self.comms.record_comms_event('Site List', -1, 'Site List', f'HTTP Error - {response.status_code}')
             return None
 
         try:
@@ -165,7 +206,8 @@ class SiteFetcher:
             return response.text
         except ValueError as e:
             print(f"[get_sites] invalid JSON response: {e}")
-            self.comms.record_comms_event('Site List', -1, 'Site List', 'Parsing Error')
+            if self.comms:
+                self.comms.record_comms_event('Site List', -1, 'Site List', 'Parsing Error')
 
             return None
 
@@ -197,18 +239,21 @@ class SiteFetcher:
                 site_data = self.get_site_info(site_id)
             except Exception as e:
                 print(f"error fetching site info for site {site_id} {site_name}")
-                self.comms.record_comms_event('Site', site_id, 'Site Info', 'Parsing Error')
+                if self.comms:
+                   self.comms.record_comms_event('Site', site_id, 'Site Info', 'Parsing Error')
 
                 print(e)
                 return
 
-            try:
-                # Push data to Kafka topic
-                self.producer.produce('sites', value=site_data, callback=kafka_callback)
-                # Flush any pending messages to Kafka
-                self.producer.flush()
-            except KeyboardInterrupt:
-                print("Producer interrupted. Exiting...")
+            if self.use_kafka and self.producer:
+                try:
+                    # Push data to Kafka topic
+                    self.producer.produce('sites', value=site_data, callback=kafka_callback)
+                    # Flush any pending messages to Kafka
+                    self.producer.flush()
+                except KeyboardInterrupt:
+                    print("Producer interrupted. Exiting...")
+            return
 
     def get_site_hardware(self, site_id, site_name):
         '''Fetch site hardware from also energy, requires session cookie and site id'''
@@ -231,34 +276,38 @@ class SiteFetcher:
         
         else:
             print(f'bad response from site hardware for site {site_id}')
-            self.comms.record_comms_event('Site', site_id, 'Site Hardware', f'HTTP Error - {response.status_code}')
+            if self.comms:
+                self.comms.record_comms_event('Site', site_id, 'Site Hardware', f'HTTP Error - {response.status_code}')
 
             return
 
     def produce_hardware(self, hardwares):
         if not hardwares:
             return
-        try:
-            # Push data to Kafka topic
-            self.producer.produce('hardware', value=hardwares, callback=kafka_callback)
-            # Flush any pending messages to Kafka
-            self.producer.flush()
-        except KeyboardInterrupt:
-            print("Producer interrupted. Exiting...")
+        if self.use_kafka and self.producer:
+            try:
+                # Push data to Kafka topic
+                self.producer.produce('hardware', value=hardwares, callback=kafka_callback)
+                # Flush any pending messages to Kafka
+                self.producer.flush()
+            except KeyboardInterrupt:
+                print("Producer interrupted. Exiting...")
+        return
 
 
     def produce_site_list(self, sites):
         '''Function to fetch site list and push to kafka topic'''
-        try:
-            # Push data to Kafka topic
-            self.producer.produce('sites_list', value=sites, callback=kafka_callback)
-            
-            # Flush any pending messages to Kafka
-            self.producer.flush()
+        if self.use_kafka and self.producer:
+            try:
+                # Push data to Kafka topic
+                self.producer.produce('sites_list', value=sites, callback=kafka_callback)
+                
+                # Flush any pending messages to Kafka
+                self.producer.flush()
 
-            print("Sites data pushed to kafka")
-        except KeyboardInterrupt:
-            print("Producer interrupted. Exiting...")
+                print("Sites data pushed to kafka")
+            except KeyboardInterrupt:
+                print("Producer interrupted. Exiting...")
             
         return
 
@@ -335,11 +384,12 @@ class SiteFetcher:
             return json.dumps(data)
         elif response.status_code != 204:
             print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
-            self.comms.record_comms_event('Site', site_id, metric_key, f'HTTP Error - {response.status_code}')
+            if self.comms:
+                self.comms.record_comms_event('Site', site_id, metric_key, f'HTTP Error - {response.status_code}')
 
             for hw_id in hw_ids.split(","):
 
-                if hw_id is not None and hw_id != '':
+                if hw_id is not None and hw_id != '' and self.comms:
                     self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
             return None
 
@@ -379,10 +429,14 @@ class SiteFetcher:
                     hw_ids_str = ",".join([str(x) for x in hw_ids])
                     chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, start_date, end_date)
                     if chart_data:
-                        self.producer.produce('hardware_metrics', value=chart_data, callback=kafka_callback)
-                        self.producer.flush()
+                        if self.use_kafka and self.producer:
+                            print(f"Producing custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids_str}")
+                            # Push data to Kafka topic
+                            self.producer.produce('hardware_metrics', value=chart_data, callback=kafka_callback)
+                            self.producer.flush()
 
-                        self.comms.record_comms_event('Site', site_id, metric, f'Successful insertion')
+                        if self.comms:
+                            self.comms.record_comms_event('Site', site_id, metric, f'Successful insertion')
 
                         print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
                         # logger.log_site(site_id, site_name, metric, [], "success")
@@ -452,10 +506,12 @@ class SiteFetcher:
 
                 # TODO: add dates
                 self.produce_sites(site_id, site_name)  # Push information for site
-                self.comms.record_comms_event('Site', site_id, 'Site Info', f'Successful insertion')
+                if self.comms:
+                    self.comms.record_comms_event('Site', site_id, 'Site Info', f'Successful insertion')
 
                 self.produce_hardware(hardwares)  # Push hardware associated with site
-                self.comms.record_comms_event('Site', site_id, 'Hardware Associations', f'Successful insertion')
+                if self.comms:
+                    self.comms.record_comms_event('Site', site_id, 'Hardware Associations', f'Successful insertion')
 
                 # Loop through every metric and produce for that site
                 for metric in metrics:
@@ -479,8 +535,10 @@ class SiteFetcher:
                 'process': self.process,
                 'event': 'failed'
             })
-            self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run failure to Kafka
-            self.producer.flush()
+            if self.use_kafka and self.producer:
+                print("Error occurred during data fetching, sending failure event to Kafka...")
+                self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run failure to Kafka
+                self.producer.flush()
             exit()
           
         # Done
@@ -492,8 +550,10 @@ class SiteFetcher:
 
         })
 
-        self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run end to Kafka
-        self.producer.flush()
+        if self.use_kafka and self.producer:
+            print("Data fetching completed successfully, sending finished event to Kafka...")
+            self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run end to Kafka
+            self.producer.flush()
 
 
 	
