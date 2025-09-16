@@ -23,12 +23,12 @@ To run the site fetcher for historical data, you can specify a date range:
 ./run_backfill.sh 2025-08-01 2025-08-09
 
 # Or directly with docker run
-docker run --rm \
+sudo docker run --rm \
     --network telemetry-net \
     -v $(pwd)/secrets.json:/app/secrets.json \
     -e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
     site_fetcher-producer:latest \
-    python app.py --start-date 2025-08-01 --end-date 2025-08-09
+    python app.py --start-date 2025-08-01 --end-date 2025-08-31
 ```
 
 The dates should be in YYYY-MM-DD format. If no dates are provided, it defaults to yesterday's data.
