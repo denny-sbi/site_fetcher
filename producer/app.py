@@ -12,8 +12,16 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# CONSTANTS:
+TODAY = datetime.now().date()
+YESTERDAY = TODAY - timedelta(days=1)
+RUN_DATE = str(datetime.now())
+
+# TODO: add a start and end date to the constructor. the start and end date get added to self.start_date and self.end_date. Additionally, they are checked for the correct format.
+# if the format is incorrect, raise an exception
+# TODO: end_date inclusive or exclusive? end_date is inclusive BUT it counts as midnight of the end date, so that day is not fetched, which makes it FEEL exclusive.
 class SiteFetcher:
-    def __init__(self, use_kafka=True):
+    def __init__(self, use_kafka=True, start_date=None, end_date=None):
         '''Initialize the SiteFetcher object, setting up authentication and Kafka producer if needed'''
 
         # Custom chart IDs for AlsoEnergy
@@ -60,8 +68,37 @@ class SiteFetcher:
         }
 
         self.RUN_ID = str(uuid.uuid4())
-        self.process = 'daily'  # TODO, detect if backfill and change process type
 
+        self.start_date = start_date
+        self.end_date = end_date
+        self.run_date = RUN_DATE
+
+        # daily processing is default, when no arguments for dates are provided
+        if self.start_date is None and self.end_date is None:
+            self.start_date = YESTERDAY
+            self.end_date = TODAY
+        # process the start date if provided by user
+        elif self.start_date is None:
+            try:
+                self.start_date = datetime.strptime(self.start_date, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError(f"Start date is required, but got {self.start_date}. Format should be YYYY-MM-DD")
+        # process the end date if provided by user
+        elif self.end_date is None:
+            try:
+                self.end_date = datetime.strptime(self.end_date, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError(f"End date is required, but got {self.end_date}. Format should be YYYY-MM-DD")
+        
+        # check if the start date is greater than the end date
+        if self.start_date > self.end_date:
+            raise ValueError(f"Start date {self.start_date} is greater than end date {self.end_date}")
+
+        # process should be daily if start date and end date are 1 day apart. If start date is more than 2 days ago, than it should be backfill.
+        self.process = 'daily' 
+        if start_date != YESTERDAY:
+            self.process = 'backfill'
+        
         
 
         self.read_credentials()
@@ -89,10 +126,11 @@ class SiteFetcher:
             self.comms = SolarBIComms(self.producer, self.RUN_ID)
 
             run_info = json.dumps({
-                'timestamp': str(datetime.now()),
+                'timestamp': start_date,
                 'runID': self.RUN_ID,
                 'process': self.process,
-                'event': 'start'
+                'event': 'start',
+                'run_date':self.run_date,
 
             })
 
@@ -196,7 +234,8 @@ class SiteFetcher:
         except requests.RequestException as e:
             print(f"[get_sites] error fetching sites: {e}")
             if self.comms:
-                self.comms.record_comms_event('Site List', -1, 'Site List', f'HTTP Error - {response.status_code}')
+                self.comms.record_comms_event(entity_type='Site List', entity_id=-1, metric='Site List', event=f'HTTP Error - {response.status_code}', process=self.process, start_date=self.start_date, run_date=self.run_date)
+
             return None
 
         try:
@@ -207,7 +246,8 @@ class SiteFetcher:
         except ValueError as e:
             print(f"[get_sites] invalid JSON response: {e}")
             if self.comms:
-                self.comms.record_comms_event('Site List', -1, 'Site List', 'Parsing Error')
+                self.comms.record_comms_event(entity_type='Site List', entity_id=-1, metric='Site List', event=f'Parsing Error', process=self.process, start_date=self.start_date, run_date=self.run_date)
+
 
             return None
 
@@ -231,24 +271,32 @@ class SiteFetcher:
         else:
             print(f'bad response from site info for site {site_id}')
 
-            self.comms.record_comms_event('Site', site_id, 'Site Info', f'HTTP Error - {response.status_code}')
+            self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric='Site Info', event=f'HTTP Error - {response.status_code}', process=self.process, start_date=self.start_date, run_date=self.run_date)
             return
 
     def produce_sites(self, site_id, site_name):
             try:
-                site_data = self.get_site_info(site_id)
+                site_data_raw = self.get_site_info(site_id)
+                if site_data_raw is None:
+                    logging.info(f"site data raw is None for site {site_id} {site_name}")
+                    return
+                site_data = json.loads(site_data_raw)
             except Exception as e:
                 print(f"error fetching site info for site {site_id} {site_name}")
                 if self.comms:
-                   self.comms.record_comms_event('Site', site_id, 'Site Info', 'Parsing Error')
+                   self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric='Site Info', event='Parsing Error', process=self.process, start_date=self.start_date, run_date=self.run_date)
 
                 print(e)
                 return
 
+            print(f"site data: {site_data}")
+            print(f"type of site data: {type(site_data)}")
+            print(f'adding run date {self.run_date}')
+            site_data['run_date'] = self.run_date
             if self.use_kafka and self.producer:
                 try:
                     # Push data to Kafka topic
-                    self.producer.produce('sites', value=site_data, callback=kafka_callback)
+                    self.producer.produce('sites', value=json.dumps(site_data), callback=kafka_callback)
                     # Flush any pending messages to Kafka
                     self.producer.flush()
                 except KeyboardInterrupt:
@@ -267,17 +315,30 @@ class SiteFetcher:
 
         response = self.session.request("GET", url, headers=headers, data=payload)
 
+        print(f"response from site hardware for site {site_id} {site_name}: {response.status_code}")
+        logger.info(f"response : {response}")
+
         if response.status_code == requests.codes.ok:
             response = response.json()
             response['site_id'] = site_id
             response['site_name'] = site_name
-            response['recordDate'] = str(datetime.now())
+            response['recordDate'] = self.run_date
             return json.dumps(response)
         
         else:
             print(f'bad response from site hardware for site {site_id}')
             if self.comms:
-                self.comms.record_comms_event('Site', site_id, 'Site Hardware', f'HTTP Error - {response.status_code}')
+                logger.info(f"logging comms for site id {site_id} in the get_site_hardware function")
+                print(f"logging comms for site id {site_id} in the get_site_hardware function")
+                print("{entity_type}, {entity_id}, {metric}, {event}, {process}, {start_date}, {run_date}".format(entity_type='Site', 
+                entity_id=site_id, 
+                metric='Site Hardware', 
+                event=f'HTTP Error - {response.status_code}', 
+                process=self.process, 
+                start_date=self.start_date, 
+                run_date=self.run_date)
+)
+                self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric='Site Hardware', event=f'HTTP Error - {response.status_code}', process=self.process, start_date=self.start_date, run_date=self.run_date)
 
             return
 
@@ -351,6 +412,8 @@ class SiteFetcher:
 
         return categories
 
+    # TODO: refector so that there is only one reference to the start and end date (self.start_date, self.end_date)
+    # TODO: note that timestamp is "starting on" time
     def get_hardware_metrics(self, metric_key, site_id, site_name, hw_ids, start_date, end_date):
         '''Fetch custom metric data from also energy, requires metric key, site_id, hardware, start_date, end_date, and cookie'''
         chart_id = self.CUSTOM_CHART_IDS.get(metric_key)
@@ -381,18 +444,23 @@ class SiteFetcher:
             data["site_name"] = site_name
             data["hardware_ids"] = hw_ids
             data["metric"] = metric_key
+            data["timestamp"] = start_date.strftime("%Y-%m-%d") if hasattr(start_date, 'strftime') else str(start_date)
+            data["run_date"] = self.run_date
             return json.dumps(data)
         elif response.status_code != 204:
             print(f"Error fetching custom metric data for {metric_key} from {site_id} {site_name} / {hw_ids} : {response.status_code}") 
             if self.comms:
-                self.comms.record_comms_event('Site', site_id, metric_key, f'HTTP Error - {response.status_code}')
+                self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric=metric_key, event=f'HTTP Error - {response.status_code}', process=self.process, start_date=self.start_date, run_date=self.run_date)
+
 
             for hw_id in hw_ids.split(","):
 
                 if hw_id is not None and hw_id != '' and self.comms:
-                    self.comms.record_comms_event('Hardware', hw_id, metric_key, f'HTTP Error - {response.status_code}')
+                    self.comms.record_comms_event(entity_type='Hardware', entity_id=hw_id, metric=metric_key, event=f'HTTP Error - {response.status_code}', process=self.process, start_date=self.start_date, run_date=self.run_date)
+
             return None
 
+    # TODO: DO NOT update start and end date to be self.start_date and self.end_date. This section needs it's own start date because it's looping and will be different than self.start_date
     def produce_hardware_metrics(self, metric, site, hardwares, start_date, end_date):
         '''Function to fetch metrics and push to kafka topic'''
 
@@ -403,7 +471,7 @@ class SiteFetcher:
 
 
         if not hardwares:
-            print(f"[{metric}] No hardware retrieved for site {site_id} {site_name}")
+            print(f"[{metric}] No hardware retrieved for site {site_id} {site_name} for date {start_date}")
             # logger.log_site(site_id, site_name, metric, [], "fail", f"No hardware retrieved for metric: {metric}")
             return
         else:
@@ -430,21 +498,22 @@ class SiteFetcher:
                     chart_data = self.get_hardware_metrics(metric, site_id, site_name, hw_ids_str, start_date, end_date)
                     if chart_data:
                         if self.use_kafka and self.producer:
-                            print(f"Producing custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids_str}")
+                            print(f"Producing custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids_str} on date {start_date}")
                             # Push data to Kafka topic
                             self.producer.produce('hardware_metrics', value=chart_data, callback=kafka_callback)
                             self.producer.flush()
 
                         if self.comms:
-                            self.comms.record_comms_event('Site', site_id, metric, f'Successful insertion')
+                            self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric=metric, event=f'Successful insertion', process=self.process, start_date=start_date, run_date=self.run_date)
 
-                        print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
+
+                        print(f"Produced custom chart data for {metric} from site {site_id} {site_name}, hardware {hw_ids}, start date {start_date}")
                         # logger.log_site(site_id, site_name, metric, [], "success")
                     else:
-                        print(f"Received empty response for {metric} from site {site_id} {site_name}, hardware {hw_ids}")
+                        print(f"Received empty response for {metric} from site {site_id} {site_name}, hardware {hw_ids}, start date {start_date}")
                         # logger.log_site(site_id, site_name, metric, hw_ids, "null", f"Empty response for metric {metric}")	
             except Exception as e:
-                print(f"error fetching custom metric data for {metric} for site {site_id} {site_name}, hardware {hw_ids}: {e}")
+                print(f"error fetching custom metric data for {metric} for site {site_id} {site_name}, hardware {hw_ids}: {e}, start date {start_date}")
                 # logger.log_site(site_id, site_name, metric, hw_ids, "fail", f"{metric} error: {e}")
                 return
         return
@@ -470,20 +539,21 @@ class SiteFetcher:
             else:
                 # Validate date format
                 try:
-                    datetime.strptime(start_date, "%Y-%m-%d")
-                    datetime.strptime(end_date, "%Y-%m-%d")
+                    start_date = datetime.strptime(start_date, "%Y-%m-%d")
+                    end_date = datetime.strptime(end_date, "%Y-%m-%d")
+                    # Update process type for backfill
+                    self.process = 'backfill'
                 except ValueError:
                     raise ValueError("Dates must be in YYYY-MM-DD format")
                 
-                # Update process type for backfill
-                self.process = 'backfill'
+                
 
             # TODO: differentiate between daily and backfill processes
             # daily process should run with for yesterday
             # the backfill process should loop through the dates in the date range
             # and produce data for each date
 
-                
+            print('getting sites')
             sites_raw = self.get_sites()  # API call to grab list of sites
             self.produce_site_list(sites_raw)  # Push site list to kafka feed
             sites = json.loads(sites_raw)['items']
@@ -494,7 +564,7 @@ class SiteFetcher:
             for site in sites:
                 site_id = site['siteId']
                 site_name = site['siteName']
-
+                print(f"getting hardware for site {site_id} {site_name}")
                 # Get hardware for that site
                 try:
                     hardwares = self.get_site_hardware(site_id, site_name)
@@ -507,18 +577,23 @@ class SiteFetcher:
                 # TODO: add dates
                 self.produce_sites(site_id, site_name)  # Push information for site
                 if self.comms:
-                    self.comms.record_comms_event('Site', site_id, 'Site Info', f'Successful insertion')
+                    self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric='Site Info', event=f'Successful insertion', process=self.process, start_date=self.start_date, run_date=self.run_date)
 
                 self.produce_hardware(hardwares)  # Push hardware associated with site
                 if self.comms:
-                    self.comms.record_comms_event('Site', site_id, 'Hardware Associations', f'Successful insertion')
+                    self.comms.record_comms_event(entity_type='Site', entity_id=site_id, metric='Harware Associations', event=f'Successful insertion', process=self.process, start_date=self.start_date, run_date=self.run_date)
+
 
                 # Loop through every metric and produce for that site
+                print(f'date is {start_date} and type {type(start_date)}')
+                print(f'date is {end_date} and type {type(end_date)}')
                 for metric in metrics:
                     if self.process == 'backfill':
-                        for date in range(start_date, end_date):
+                        date = start_date
+                        while date < end_date:
                             logger.info(f"Producing {metric} for {site_id} {site_name} for date {date - timedelta(days=1)} to {date}")
                             self.produce_hardware_metrics(metric, site, hardwares, date - timedelta(days=1), date)
+                            date = date + timedelta(days=1)
                     else:
                         logger.info(f"Producing {metric} for {site_id} {site_name} for date {start_date} to {end_date}")
                         self.produce_hardware_metrics(metric, site, hardwares, start_date, end_date)
@@ -528,15 +603,16 @@ class SiteFetcher:
                 
 
         except Exception as e:
-            print(e)
+            print(f'error in get data function: {e}')
             run_info = json.dumps({
-                'timestamp': str(datetime.now()),
+                'timestamp': self.run_date,
                 'runID': self.RUN_ID,
                 'process': self.process,
                 'event': 'failed'
             })
             if self.use_kafka and self.producer:
                 print("Error occurred during data fetching, sending failure event to Kafka...")
+                print(f"run info: {run_info}")
                 self.producer.produce('solarbi_runs', value=run_info, callback=kafka_callback)  # Push Run failure to Kafka
                 self.producer.flush()
             exit()
