@@ -31,6 +31,6 @@ def kafka_callback(err, msg):
     if err is not None:
         print(f"Message delivery failed: {err}")
     else:
-        print(f"Message delivered to {msg.topic} partition {msg.partition} with offset {msg.offset}")
+        print(f"Message delivered to {msg.topic()} partition {msg.partition()} with offset {msg.offset()}")
 
 
