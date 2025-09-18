@@ -1,7 +1,7 @@
 # Solar BI - Site Fetcher
 ### How to use
 
-Create docker network:
+Create docker network. Only need to do this once:
 ```bash
 sudo docker network create telemetry-net
 ```
@@ -12,12 +12,33 @@ Run docker container:
 sudo docker compose up --build -d
 ```
 
+or go via your path
+cd /home/prod-user/solar_bi/site_fetcher && sudo docker compose up --build -d
+
+Check the logs
+```bash
+# see the line count of the logs
+sudo docker logs site_fetcher-producer-1 | wc
+# see the logs
+sudo docker logs site_fetcher-producer-1
+# see the last 20 lines
+timeout 10 sudo docker logs site_fetcher-producer-1 | tail -20
+#
+sudo docker logs site_fetcher-producer-1 | grep -A 5 -B 5 "Message delivered to solarbi_runs"
+```
+
 ### What is this image responsible for?
 The goal of this image is to fetch data reliant on a site id. This data is less likely to change within the timeframe of a day, so it will exit after it completes the fetch. This will allow the container to be deployed at whatever frequency required.
 
 ### Running Historical Backfill
 To run the site fetcher for historical data, you can specify a date range:
 
+Current solution
+go to the Dockerfile and add a start and end date
+
+`CMD ["python", "app.py", "--start-date", "2025-08-06", "--end-date", "2025-08-10"]`
+
+FUTURE WORK
 ```bash
 # Using the convenience script
 ./run_backfill.sh 2025-08-01 2025-08-09
