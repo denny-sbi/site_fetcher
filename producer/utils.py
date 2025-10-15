@@ -3,7 +3,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 def get_retrying_session(
-        retries=5,
+        retries=2,
         backoff_factor=1,
         status_forcelist=(429, 500, 502, 503, 504),
         session=None
